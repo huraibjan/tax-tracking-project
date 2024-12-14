@@ -1,0 +1,874 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Tax Tracking System</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css" rel="stylesheet" />
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      const API_URL = "http://127.0.0.1:5000/records";
+      let fetchedRecords = [];
+      let editRecordId = null;
+      let deleteRecordId = null;
+
+      // Toast Notification
+      function showToast(message, isError = false) {
+        const toast = document.createElement("div");
+        toast.className = `fixed top-5 right-5 ${isError ? "bg-red-500" : "bg-green-500"} text-white px-4 py-2 rounded shadow`;
+        toast.innerHTML = message || (isError ? "An error occurred!" : "Success!");
+        document.body.appendChild(toast);
+        setTimeout(() => toast.remove(), 3000);
+      }
+
+      // Dynamically Generate Due Dates
+      const generateDueDates = () => {
+        const currentYear = new Date().getFullYear();
+        const dueDates = [
+          { value: `04/15/${currentYear}`, label: `April 15, ${currentYear}` },
+          { value: `06/15/${currentYear}`, label: `June 15, ${currentYear}` },
+          { value: `09/15/${currentYear}`, label: `September 15, ${currentYear}` },
+          { value: `01/15/${currentYear + 1}`, label: `January 15, ${currentYear + 1}` },
+        ];
+
+        // Populate the filter dropdown
+        const filterDropdown = document.getElementById("filter_due_date");
+        if (filterDropdown) {
+          filterDropdown.innerHTML = `
+      <option value="">All Records</option>
+      ${dueDates.map((date) => `<option value="${date.value}">${date.label}</option>`).join("")}
+    `;
+        }
+
+        // Populate the due date dropdowns for adding/editing records
+        const recordDropdowns = document.querySelectorAll(".due-date-select:not(#filter_due_date)");
+        recordDropdowns.forEach((dropdown) => {
+          dropdown.innerHTML = `
+      <option value="" disabled selected>Select</option>
+      ${dueDates.map((date) => `<option value="${date.value}">${date.label}</option>`).join("")}
+    `;
+        });
+      };
+
+      function formatDateForBackend(dateString) {
+        if (!dateString) return null;
+
+        const [month, day, year] = dateString.split("/");
+        return `${year}-${month}-${day}`; // Convert MM/DD/YYYY to YYYY-MM-DD
+      }
+
+      const fetchRecords = async (filterDate = null) => {
+        try {
+          const formattedDate = filterDate ? formatDateForBackend(filterDate) : null;
+          const url = formattedDate ? `${API_URL}?due_date=${formattedDate}` : API_URL;
+          const response = await fetch(url);
+          const records = await response.json();
+
+          if (!response.ok) throw new Error(records.error || "Failed to fetch records");
+
+          fetchedRecords = records;
+          populateTable(records);
+          updateSummary(records);
+          showCalculationSection(records.length > 0);
+          showToast(records.length > 0 ? "Records loaded successfully." : "No records found for the selected date.", records.length === 0);
+        } catch (error) {
+          console.error("Error fetching records:", error);
+          populateTable([]);
+          updateSummary([]);
+          showCalculationSection(false);
+          showToast("Failed to fetch records. Please try again later.", true);
+        }
+      };
+      const showCalculationSection = (show) => {
+        const summary = document.getElementById("summary");
+        summary.style.display = show ? "block" : "none";
+      };
+
+      function updateSummary(records) {
+        const totalAmountElement = document.getElementById("total_amount");
+        const taxDueElement = document.getElementById("tax_due");
+        const taxRateInput = document.getElementById("tax_rate");
+
+        // Ensure the required elements exist
+        if (!totalAmountElement || !taxDueElement || !taxRateInput) {
+          console.error("Summary elements are missing in the DOM.");
+          return;
+        }
+
+        if (records.length > 0) {
+          const totalAmount = records.reduce((sum, record) => sum + record.amount, 0);
+          const taxRate = parseFloat(taxRateInput.value) || 0; // Default to 0 if empty
+          const taxDue = totalAmount * (taxRate / 100);
+
+          // Update values
+          totalAmountElement.textContent = `$${totalAmount.toFixed(2)}`;
+          taxDueElement.textContent = `$${taxDue.toFixed(2)}`;
+
+          // Show the summary section
+          document.getElementById("summary").style.display = "block";
+        } else {
+          // Reset summary values
+          totalAmountElement.textContent = "$0.00";
+          taxDueElement.textContent = "$0.00";
+
+          // Hide the summary section
+          document.getElementById("summary").style.display = "none";
+        }
+      }
+
+      const populateTable = (records) => {
+        const tableBody = document.getElementById("recordsTableBody");
+        tableBody.innerHTML = records.length
+          ? records
+              .map(
+                (record) => `
+          <tr class="border-b">
+            <td class="px-4 py-2 text-center">${record.id}</td>
+            <td class="px-4 py-2 text-center">${record.company}</td>
+            <td class="px-4 py-2 text-center">${record.amount.toFixed(2)}</td>
+            <td class="px-4 py-2 text-center">${record.payment_date ? formatDate(record.payment_date) : "N/A"}</td>
+            <td class="px-4 py-2 text-center">${record.status}</td>
+            <td class="px-4 py-2 text-center">${formatDate(record.due_date)}</td>
+            <td class="px-4 py-2 text-center flex justify-center space-x-4">
+              <button class="bg-blue-500 text-white px-2 py-1 rounded hover:bg-blue-600" onclick="openEditModal(
+                ${record.id}, 
+                '${record.company}', 
+                ${record.amount}, 
+                '${record.payment_date}', 
+                '${record.status}', 
+                '${record.due_date}'
+              )">
+                <i class="fas fa-edit"></i>
+              </button>
+              <button class="bg-red-500 text-white px-2 py-1 rounded hover:bg-red-600" onclick="openDeleteModal(${record.id})">
+                <i class="fas fa-trash"></i>
+              </button>
+            </td>
+          </tr>`
+              )
+              .join("")
+          : `<tr><td colspan="7" class="text-center text-red-500">No records available.</td></tr>`;
+      };
+
+      async function addRecord() {
+        const company = document.getElementById("company").value.trim();
+        const amount = parseFloat(document.getElementById("amount").value);
+        const payment_date = formatDate(document.getElementById("payment_date").value); // Format for backend
+        const status = document.getElementById("status").value.trim();
+        const due_date = formatDate(document.getElementById("due_date").value); // Format for backend
+
+        // Validate inputs
+        if (!company || isNaN(amount) || amount <= 0 || !due_date) {
+          showToast("All fields are required and must be valid!", true);
+          return;
+        }
+
+        const data = { company, amount, payment_date, status, due_date };
+
+        try {
+          const response = await fetch(API_URL, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(data),
+          });
+
+          if (!response.ok) {
+            const error = await response.json();
+            showToast(`Error: ${error.message || "Failed to add record"}`, true);
+            return;
+          }
+
+          document.getElementById("taxForm").reset();
+          fetchRecords();
+          showToast("Record added successfully!");
+        } catch (error) {
+          console.error("Network or server error:", error);
+          showToast("Failed to add record. Please try again later.", true);
+        }
+      }
+
+      async function updateRecord() {
+        const company = document.getElementById("edit_company").value;
+        const amount = parseFloat(document.getElementById("edit_amount").value);
+        const payment_date = formatDate(document.getElementById("edit_payment_date").value, true); // Use `formatDate` with forSaving = true
+        const status = document.getElementById("edit_status").value;
+        const due_date = formatDate(document.getElementById("edit_due_date").value, true); // Use `formatDate` with forSaving = true
+
+        if (!company || !amount || !due_date) {
+          showToast("All fields are required!", true);
+          return;
+        }
+
+        const data = { company, amount, payment_date, status, due_date };
+
+        await fetch(`${API_URL}/${editRecordId}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data),
+        });
+
+        document.getElementById("editModal").classList.add("hidden");
+        fetchRecords();
+        showToast("Record updated successfully!");
+      }
+
+      function openDeleteModal(id) {
+        deleteRecordId = id;
+        document.getElementById("deleteModal").classList.remove("hidden");
+      }
+
+      async function confirmDelete() {
+        await fetch(`${API_URL}/${deleteRecordId}`, { method: "DELETE" });
+        document.getElementById("deleteModal").classList.add("hidden");
+        fetchRecords();
+        showToast("Record deleted successfully!");
+      }
+
+      function cancelDelete() {
+        deleteRecordId = null;
+        document.getElementById("deleteModal").classList.add("hidden");
+      }
+
+      function openEditModal(id, company, amount, payment_date, status, due_date) {
+        editRecordId = id; // Store the ID for later updates
+
+        // Populate the modal fields
+        document.getElementById("edit_company").value = company || "";
+        document.getElementById("edit_amount").value = amount || "";
+        document.getElementById("edit_payment_date").value = payment_date ? formatDateForEdit(payment_date) : ""; // Format the date properly for input
+        document.getElementById("edit_status").value = status || "";
+
+        // Set the selected value for the "Due Date" dropdown
+        const dueDateSelect = document.getElementById("edit_due_date");
+        if (dueDateSelect) {
+          dueDateSelect.value = due_date || ""; // Match the value to the option
+        }
+
+        // Debugging log
+        console.log("Opening modal with:", { id, company, amount, payment_date, status, due_date });
+
+        // Show the modal
+        document.getElementById("editModal").classList.remove("hidden");
+      }
+
+      function formatDateForEdit(dateString) {
+        if (!dateString) return null;
+
+        // Convert from MM/DD/YYYY to YYYY-MM-DD for input fields
+        const [month, day, year] = dateString.split("/");
+        return `${year}-${month}-${day}`;
+      }
+
+      function closeEditModal() {
+        editRecordId = null;
+        document.getElementById("editModal").classList.add("hidden");
+      }
+
+      window.onload = function () {
+        generateDueDates();
+        fetchRecords();
+      };
+
+      function formatDate(dateString, forSaving = false) {
+        if (!dateString) return null;
+
+        const date = new Date(dateString);
+
+        // Correct for time zone offsets
+        const adjustedDate = new Date(date.getTime() + date.getTimezoneOffset() * 60000);
+
+        const month = String(adjustedDate.getMonth() + 1).padStart(2, "0"); // Months are 0-indexed
+        const day = String(adjustedDate.getDate()).padStart(2, "0");
+        const year = adjustedDate.getFullYear();
+
+        // Return in MM/DD/YYYY format
+        return `${month}/${day}/${year}`;
+      }
+    </script>
+  </head>
+  <body class="bg-blue-50 p-6">
+    <h1 class="text-3xl font-bold mb-4 text-center text-blue-600">Tax Tracking System</h1>
+
+    <div class="mb-8">
+      <h2 class="text-2xl font-semibold mb-4 text-blue-500">Add Tax Record</h2>
+      <form id="taxForm" class="space-y-4" onsubmit="event.preventDefault(); addRecord();">
+        <div>
+          <label class="block font-medium">Company:</label>
+          <input type="text" id="company" class="w-full p-2 border rounded" required />
+        </div>
+        <div>
+          <label class="block font-medium">Amount:</label>
+          <input type="number" id="amount" class="w-full p-2 border rounded" required />
+        </div>
+        <div>
+          <label class="block font-medium">Payment Date:</label>
+          <input type="date" id="payment_date" class="w-full p-2 border rounded" />
+        </div>
+        <div>
+          <label class="block font-medium">Status:</label>
+          <select id="status" class="w-full p-2 border rounded" required>
+            <option value="" disabled selected>Select</option>
+            <option value="paid">Paid</option>
+            <option value="unpaid">Unpaid</option>
+          </select>
+        </div>
+
+        <div>
+          <label class="block font-medium">Due Date:</label>
+          <select id="due_date" class="w-full p-2 border rounded due-date-select" required>
+            <!-- <option value="" disabled selected>Select</option> -->
+          </select>
+        </div>
+
+        <button class="bg-blue-500 text-white px-4 py-2 rounded" type="submit">Add Record</button>
+      </form>
+    </div>
+
+    <div class="mb-8">
+      <h2 class="text-2xl font-semibold mb-4 text-blue-500">Filter Records</h2>
+      <label class="block font-medium">Filter by Due Date:</label>
+      <select id="filter_due_date" class="w-full p-2 border rounded due-date-select" onchange="fetchRecords(this.value)">
+        <!-- <option value="" disabled selected>Select</option> -->
+      </select>
+    </div>
+
+    <div class="mb-8">
+      <h2 class="text-2xl font-semibold mb-4 text-blue-500">Tax Records</h2>
+      <div class="overflow-y-scroll h-64">
+        <table class="table-auto w-full border-collapse border border-gray-300 bg-gray-100 rounded-lg shadow-md">
+          <thead>
+            <tr class="bg-blue-500 text-white">
+              <th class="border px-4 py-2 text-center">ID</th>
+              <th class="border px-4 py-2 text-center">Company</th>
+              <th class="border px-4 py-2 text-center">Amount</th>
+              <th class="border px-4 py-2 text-center">Payment Date</th>
+              <th class="border px-4 py-2 text-center">Status</th>
+              <th class="border px-4 py-2 text-center">Due Date</th>
+              <th class="border px-4 py-2 text-center">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="recordsTableBody" class="bg-white"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div id="summary" class="bg-blue-100 p-6 shadow-lg rounded-lg" style="display: none">
+      <p class="font-semibold text-blue-700">Total Amount: <strong id="total_amount">$0.00</strong></p>
+      <div class="flex items-center space-x-4 mt-2">
+        <label for="tax_rate" class="block font-medium text-blue-600">Tax Rate (%):</label>
+        <input id="tax_rate" type="number" class="w-40 p-2 border rounded text-center" placeholder="Enter tax rate" onchange="updateSummary(fetchedRecords)" />
+      </div>
+      <p class="font-semibold text-blue-700 mt-4">Tax Due: <strong id="tax_due">$0.00</strong></p>
+    </div>
+
+    <div id="editModal" class="fixed inset-0 bg-gray-900 bg-opacity-50 flex justify-center items-center hidden">
+      <div class="bg-white p-6 rounded shadow w-1/3 relative">
+        <button class="absolute top-2 right-2 text-gray-600 hover:text-black" onclick="closeEditModal()">&times;</button>
+        <h2 class="text-xl font-bold mb-4">Edit Record</h2>
+        <form class="space-y-4" onsubmit="event.preventDefault(); updateRecord();">
+          <div>
+            <label class="block font-medium">Company:</label>
+            <input type="text" id="edit_company" class="w-full p-2 border rounded" required />
+          </div>
+          <div>
+            <label class="block font-medium">Amount:</label>
+            <input type="number" id="edit_amount" class="w-full p-2 border rounded" required />
+          </div>
+          <div>
+            <label class="block font-medium">Payment Date:</label>
+            <input type="date" id="edit_payment_date" class="w-full p-2 border rounded" />
+          </div>
+          <div>
+            <label class="block font-medium">Status:</label>
+            <select id="edit_status" class="w-full p-2 border rounded" required>
+              <option value="paid">Paid</option>
+              <option value="unpaid">Unpaid</option>
+            </select>
+          </div>
+          <div>
+            <label class="block font-medium">Due Date:</label>
+            <select id="edit_due_date" class="w-full p-2 border rounded due-date-select" required></select>
+          </div>
+          <button class="bg-green-500 text-white px-4 py-2 rounded" type="submit">Save Changes</button>
+        </form>
+      </div>
+    </div>
+    <div id="deleteModal" class="fixed inset-0 bg-gray-900 bg-opacity-50 flex justify-center items-center hidden">
+      <div class="bg-white p-6 rounded shadow w-1/3">
+        <h2 class="text-xl font-bold mb-4">Confirm Deletion</h2>
+        <p class="mb-6">Are you sure you want to delete this record?</p>
+        <div class="flex justify-end space-x-4">
+          <button class="bg-gray-500 text-white px-4 py-2 rounded" onclick="cancelDelete()">Cancel</button>
+          <button class="bg-red-500 text-white px-4 py-2 rounded" onclick="confirmDelete()">Delete</button>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>
+
+<!-- <!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Tax Tracking System</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css" rel="stylesheet" />
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      const API_URL = "http://127.0.0.1:5000/records";
+      let fetchedRecords = [];
+      let editRecordId = null;
+      let deleteRecordId = null;
+
+      // Toast Notification
+      function showToast(message, isError = false) {
+        const toast = document.createElement("div");
+        toast.className = `fixed top-5 right-5 ${isError ? "bg-red-500" : "bg-green-500"} text-white px-4 py-2 rounded shadow`;
+        toast.innerHTML = message || (isError ? "An error occurred!" : "Success!");
+        document.body.appendChild(toast);
+        setTimeout(() => toast.remove(), 3000);
+      }
+
+      // Dynamically Generate Due Dates
+      function generateDueDates() {
+        const dueDateSelects = document.querySelectorAll(".due-date-select");
+        const currentYear = new Date().getFullYear();
+
+        // Corrected to ensure proper "15th" dates
+        const dueDates = [
+          { value: "", label: "All Records" }, // Add "All Records" option
+          { value: `04/15/${currentYear}`, label: `April 15, ${currentYear}` },
+          { value: `06/15/${currentYear}`, label: `June 15, ${currentYear}` },
+          {
+            value: `09/15/${currentYear}`,
+            label: `September 15, ${currentYear}`,
+          },
+          {
+            value: `01/15/${currentYear + 1}`,
+            label: `January 15, ${currentYear + 1}`,
+          },
+        ];
+
+        dueDateSelects.forEach((select) => {
+          select.innerHTML = dueDates.map((date) => `<option value="${date.value}">${date.label}</option>`).join("");
+        });
+      }
+
+      document.addEventListener("DOMContentLoaded", () => {
+        const filterDropdown = document.getElementById("filter_due_date");
+        const saveTaxButton = document.getElementById("save_tax_button");
+
+        // Add event listener to dynamically handle dropdown changes
+        filterDropdown.addEventListener("change", () => {
+          console.log("Dropdown changed. Fetching records...");
+
+          // Fetch records for the selected date
+          const selectedDate = filterDropdown.value;
+          fetchRecords(selectedDate);
+
+          // Dynamically handle the Save button visibility based on records
+          if (fetchedRecords.length > 0) {
+            console.log("Records available. Enabling Save button...");
+            saveTaxButton.disabled = false;
+            saveTaxButton.style.display = "inline-block";
+          } else {
+            console.log("No records available. Disabling Save button...");
+            saveTaxButton.disabled = true;
+            saveTaxButton.style.display = "none";
+          }
+        });
+      });
+
+      function formatDateForBackend(dateString) {
+        if (!dateString) return null;
+
+        const [month, day, year] = dateString.split("/");
+        return `${year}-${month}-${day}`; // Convert MM/DD/YYYY to YYYY-MM-DD
+      }
+
+      async function fetchRecords(filterDate = null) {
+        try {
+          // Convert filterDate to YYYY-MM-DD if it exists
+          const formattedDate = filterDate
+            ? formatDateForBackend(filterDate) // Convert to YYYY-MM-DD
+            : null;
+
+          // Construct the API URL
+          const url = formattedDate ? `${API_URL}?due_date=${formattedDate}` : API_URL;
+
+          // Fetch records from the API
+          const response = await fetch(url);
+          const records = await response.json();
+
+          if (!response.ok) {
+            throw new Error(records.error || "Failed to fetch records");
+          }
+
+          console.log("Fetched Records:", records); // Debugging log for fetched records
+
+          // Store records globally
+          fetchedRecords = records;
+
+          // Populate the table
+          populateTable(records);
+
+          // Update the Save button and summary section
+          const saveTaxButton = document.getElementById("save_tax_button");
+
+          if (records.length > 0) {
+            console.log("Records available. Enabling Save button...");
+
+            // Rebuild the summary section if necessary
+            if (!document.getElementById("total_amount") || !document.getElementById("tax_due")) {
+              document.getElementById("summary").innerHTML = `
+          <p>Total Amount: <strong id="total_amount">$0.00</strong></p>
+          <p>
+            Tax Rate:
+            <input id="tax_rate" type="number" class="w-20 p-1 border rounded" onchange="calculateTax(fetchedRecords)" value="0" />%
+          </p>
+          <p>Tax Due: <strong id="tax_due">$0.00</strong></p>
+        `;
+            }
+
+            calculateTax(records); // Update tax calculation
+
+            // Ensure the Save button exists before modifying it
+            if (saveTaxButton) {
+              saveTaxButton.disabled = false; // Enable Save button
+              saveTaxButton.style.display = "inline-block"; // Ensure it's visible
+            }
+          } else {
+            console.log("No records. Disabling Save button...");
+
+            // Show a "No Records Found" message
+            document.getElementById("summary").innerHTML = `
+        <p class="text-red-500 font-bold">No records found for the selected date.</p>
+      `;
+
+            // Ensure the Save button exists before modifying it
+            if (saveTaxButton) {
+              saveTaxButton.disabled = true; // Disable Save button
+              saveTaxButton.style.display = "none"; // Hide the button
+            }
+          }
+        } catch (error) {
+          console.error("Error fetching records:", error);
+          showToast("Failed to fetch records. Please try again later.", true);
+
+          // Handle case where no records exist (e.g., API error or empty result)
+          document.getElementById("summary").innerHTML = `
+      <p class="text-red-500 font-bold">No records found or an error occurred.</p>
+    `;
+        }
+      }
+
+      function populateTable(records) {
+        const tableBody = document.getElementById("recordsTableBody");
+        tableBody.innerHTML = ""; // Clear previous rows
+        records.forEach((record) => {
+          const row = `<tr class="border-b">
+  <td class="px-4 py-2 text-center">${record.id}</td>
+  <td class="px-4 py-2 text-center">${record.company}</td>
+  <td class="px-4 py-2 text-center">${record.amount.toFixed(2)}</td>
+  <td class="px-4 py-2 text-center">${formatDate(record.payment_date)}</td>
+  <td class="px-4 py-2 text-center">${record.status}</td>
+  <td class="px-4 py-2 text-center">${formatDate(record.due_date)}</td>
+  <td class="px-4 py-2 text-center flex justify-center space-x-4">
+    <button
+      class="bg-blue-500 text-white px-2 py-1 rounded hover:bg-blue-600 flex items-center"
+      onclick="openEditModal(${record.id}, '${record.company}', ${record.amount}, '${record.payment_date}', '${record.status}', '${record.due_date}')"
+    >
+      <i class="fas fa-edit mr-1"></i> Edit
+    </button>
+    <button
+      class="bg-red-500 text-white px-2 py-1 rounded hover:bg-red-600 flex items-center"
+      onclick="openDeleteModal(${record.id})"
+    >
+      <i class="fas fa-trash mr-1"></i> Delete
+    </button>
+  </td>
+</tr>`;
+
+          tableBody.innerHTML += row;
+        });
+      }
+
+      function calculateTax(records) {
+        const taxRateInput = document.getElementById("tax_rate");
+        const totalAmountElement = document.getElementById("total_amount");
+        const taxDueElement = document.getElementById("tax_due");
+
+        // Check if elements exist
+        if (!totalAmountElement || !taxDueElement) {
+          console.error("Summary elements are missing. Skipping tax calculation.");
+          return;
+        }
+
+        const taxRate = parseFloat(taxRateInput.value) || 0;
+
+        // Calculate total amount
+        const totalAmount = records.reduce((sum, record) => sum + record.amount, 0);
+
+        // Calculate tax due
+        const taxDue = totalAmount * (taxRate / 100);
+
+        // Update Total Amount and Tax Due
+        totalAmountElement.textContent = `$${totalAmount.toFixed(2)}`;
+        taxDueElement.textContent = `$${taxDue.toFixed(2)}`;
+      }
+
+      async function addRecord() {
+        const company = document.getElementById("company").value.trim();
+        const amount = parseFloat(document.getElementById("amount").value);
+        const payment_date = formatDate(document.getElementById("payment_date").value); // Format for backend
+        const status = document.getElementById("status").value.trim();
+        const due_date = formatDate(document.getElementById("due_date").value); // Format for backend
+
+        // Validate inputs
+        if (!company || isNaN(amount) || amount <= 0 || !due_date) {
+          showToast("All fields are required and must be valid!", true);
+          return;
+        }
+
+        const data = { company, amount, payment_date, status, due_date };
+
+        try {
+          const response = await fetch(API_URL, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(data),
+          });
+
+          if (!response.ok) {
+            const error = await response.json();
+            showToast(`Error: ${error.message || "Failed to add record"}`, true);
+            return;
+          }
+
+          document.getElementById("taxForm").reset();
+          fetchRecords();
+          showToast("Record added successfully!");
+        } catch (error) {
+          console.error("Network or server error:", error);
+          showToast("Failed to add record. Please try again later.", true);
+        }
+      }
+
+      async function updateRecord() {
+        const company = document.getElementById("edit_company").value;
+        const amount = parseFloat(document.getElementById("edit_amount").value);
+        const payment_date = formatDate(document.getElementById("edit_payment_date").value, true); // Use `formatDate` with forSaving = true
+        const status = document.getElementById("edit_status").value;
+        const due_date = formatDate(document.getElementById("edit_due_date").value, true); // Use `formatDate` with forSaving = true
+
+        if (!company || !amount || !due_date) {
+          showToast("All fields are required!", true);
+          return;
+        }
+
+        const data = { company, amount, payment_date, status, due_date };
+
+        await fetch(`${API_URL}/${editRecordId}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data),
+        });
+
+        document.getElementById("editModal").classList.add("hidden");
+        fetchRecords();
+        showToast("Record updated successfully!");
+      }
+
+      function openDeleteModal(id) {
+        deleteRecordId = id;
+        document.getElementById("deleteModal").classList.remove("hidden");
+      }
+
+      async function confirmDelete() {
+        await fetch(`${API_URL}/${deleteRecordId}`, { method: "DELETE" });
+        document.getElementById("deleteModal").classList.add("hidden");
+        fetchRecords();
+        showToast("Record deleted successfully!");
+      }
+
+      function cancelDelete() {
+        deleteRecordId = null;
+        document.getElementById("deleteModal").classList.add("hidden");
+      }
+
+      function openEditModal(id, company, amount, payment_date, status, due_date) {
+        editRecordId = id;
+        document.getElementById("edit_company").value = company;
+        document.getElementById("edit_amount").value = amount;
+        document.getElementById("edit_payment_date").value = formatDate(payment_date);
+        document.getElementById("edit_status").value = status;
+        document.getElementById("edit_due_date").value = formatDate(due_date);
+        document.getElementById("editModal").classList.remove("hidden");
+      }
+
+      function closeEditModal() {
+        editRecordId = null;
+        document.getElementById("editModal").classList.add("hidden");
+      }
+
+      window.onload = function () {
+        generateDueDates();
+        fetchRecords();
+      };
+
+      function saveTaxRate() {
+        const taxRate = parseFloat(document.getElementById("tax_rate").value) || 0;
+
+        // Handle the case when no records exist
+        if (fetchedRecords.length === 0) {
+          console.warn("No records available to calculate tax.");
+          document.getElementById("total_amount").textContent = "$0.00";
+          document.getElementById("tax_due").textContent = "$0.00";
+          showToast("No records available to calculate tax!", true);
+          return;
+        }
+
+        // Calculate tax and update summary
+        calculateTax(fetchedRecords);
+        showToast(`Tax rate set to ${taxRate}% and calculated successfully!`);
+      }
+
+      function formatDate(dateString, forSaving = false) {
+        if (!dateString) return null;
+
+        const date = new Date(dateString);
+
+        // Correct for time zone offsets
+        const adjustedDate = new Date(date.getTime() + date.getTimezoneOffset() * 60000);
+
+        const month = String(adjustedDate.getMonth() + 1).padStart(2, "0"); // Months are 0-indexed
+        const day = String(adjustedDate.getDate()).padStart(2, "0");
+        const year = adjustedDate.getFullYear();
+
+        // Return in MM/DD/YYYY format
+        return `${month}/${day}/${year}`;
+      }
+    </script>
+  </head>
+  <body class="bg-blue-50 p-6">
+    <h1 class="text-3xl font-bold mb-4 text-center text-blue-600">Tax Tracking System</h1>
+
+    <div class="mb-8">
+      <h2 class="text-2xl font-semibold mb-4 text-blue-500">Add Tax Record</h2>
+      <form id="taxForm" class="space-y-4" onsubmit="event.preventDefault(); addRecord();">
+        <div>
+          <label class="block font-medium">Company:</label>
+          <input type="text" id="company" class="w-full p-2 border rounded" required />
+        </div>
+        <div>
+          <label class="block font-medium">Amount:</label>
+          <input type="number" id="amount" class="w-full p-2 border rounded" required />
+        </div>
+        <div>
+          <label class="block font-medium">Payment Date:</label>
+          <input type="date" id="payment_date" class="w-full p-2 border rounded" />
+        </div>
+        <div>
+          <label class="block font-medium">Status:</label>
+          <select id="status" class="w-full p-2 border rounded" required>
+            <option value="" disabled selected>Select</option>
+            <option value="paid">Paid</option>
+            <option value="unpaid">Unpaid</option>
+          </select>
+        </div>
+
+        <div>
+          <label class="block font-medium">Due Date:</label>
+          <select id="due_date" class="w-full p-2 border rounded due-date-select" required>
+            <option value="" disabled selected>Select</option>
+          </select>
+        </div>
+
+        <button class="bg-blue-500 text-white px-4 py-2 rounded" type="submit">Add Record</button>
+      </form>
+    </div>
+
+    <div class="mb-8">
+      <h2 class="text-2xl font-semibold mb-4 text-blue-500">Filter Records</h2>
+      <label class="block font-medium">Filter by Due Date:</label>
+      <select id="filter_due_date" class="w-full p-2 border rounded due-date-select" onchange="fetchRecords(this.value)">
+        <option value="" disabled selected>Select</option>
+      </select>
+    </div>
+
+    <div class="mb-8">
+      <h2 class="text-2xl font-semibold mb-4 text-blue-500">Tax Records</h2>
+      <div class="overflow-y-scroll h-64">
+        <table class="table-auto w-full border-collapse border border-gray-300 bg-gray-100 rounded-lg shadow-md">
+          <thead>
+            <tr class="bg-blue-500 text-white">
+              <th class="border px-4 py-2 text-center">ID</th>
+              <th class="border px-4 py-2 text-center">Company</th>
+              <th class="border px-4 py-2 text-center">Amount</th>
+              <th class="border px-4 py-2 text-center">Payment Date</th>
+              <th class="border px-4 py-2 text-center">Status</th>
+              <th class="border px-4 py-2 text-center">Due Date</th>
+              <th class="border px-4 py-2 text-center">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="recordsTableBody" class="bg-white"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div id="summary" class="bg-blue-100 p-6 shadow-lg rounded-lg">
+      <p class="font-semibold text-blue-700">Total Amount: <strong id="total_amount">$0.00</strong></p>
+      <div class="flex items-center space-x-4 mt-2">
+        <label for="tax_rate" class="block font-medium text-blue-600">Tax Rate (%):</label>
+        <input id="tax_rate" type="number" class="w-40 p-2 border rounded text-center" placeholder="Enter tax rate" onchange="calculateTax(fetchedRecords)" />
+        <button id="save_tax_button" class="bg-blue-500 text-white px-6 py-2 rounded shadow hover:bg-blue-600" onclick="saveTaxRate()">Save</button>
+      </div>
+      <p class="font-semibold text-blue-700 mt-4">Tax Due: <strong id="tax_due">$0.00</strong></p>
+    </div>
+
+    <div id="editModal" class="fixed inset-0 bg-gray-900 bg-opacity-50 flex justify-center items-center hidden">
+      <div class="bg-white p-6 rounded shadow w-1/3 relative">
+        <button class="absolute top-2 right-2 text-gray-600 hover:text-black" onclick="closeEditModal()">&times;</button>
+        <h2 class="text-xl font-bold mb-4">Edit Record</h2>
+        <form class="space-y-4" onsubmit="event.preventDefault(); updateRecord();">
+          <div>
+            <label class="block font-medium">Company:</label>
+            <input type="text" id="edit_company" class="w-full p-2 border rounded" required />
+          </div>
+          <div>
+            <label class="block font-medium">Amount:</label>
+            <input type="number" id="edit_amount" class="w-full p-2 border rounded" required />
+          </div>
+          <div>
+            <label class="block font-medium">Payment Date:</label>
+            <input type="date" id="edit_payment_date" class="w-full p-2 border rounded" />
+          </div>
+          <div>
+            <label class="block font-medium">Status:</label>
+            <select id="edit_status" class="w-full p-2 border rounded" required>
+              <option value="paid">Paid</option>
+              <option value="unpaid">Unpaid</option>
+            </select>
+          </div>
+          <div>
+            <label class="block font-medium">Due Date:</label>
+            <select id="edit_due_date" class="w-full p-2 border rounded due-date-select" required></select>
+          </div>
+          <button class="bg-green-500 text-white px-4 py-2 rounded" type="submit">Save Changes</button>
+        </form>
+      </div>
+    </div>
+    <div id="deleteModal" class="fixed inset-0 bg-gray-900 bg-opacity-50 flex justify-center items-center hidden">
+      <div class="bg-white p-6 rounded shadow w-1/3">
+        <h2 class="text-xl font-bold mb-4">Confirm Deletion</h2>
+        <p class="mb-6">Are you sure you want to delete this record?</p>
+        <div class="flex justify-end space-x-4">
+          <button class="bg-gray-500 text-white px-4 py-2 rounded" onclick="cancelDelete()">Cancel</button>
+          <button class="bg-red-500 text-white px-4 py-2 rounded" onclick="confirmDelete()">Delete</button>
+        </div>
+      </div>
+    </div>
+  </body>
+</html> -->

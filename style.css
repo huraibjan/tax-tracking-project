@@ -1,0 +1,17 @@
+/* Add to your Tailwind classes or a custom stylesheet */
+.flex.justify-end {
+  margin-top: 1rem;
+  margin-bottom: 1rem;
+}
+
+.table-auto th,
+.table-auto td {
+  text-align: center;
+}
+
+.button-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
